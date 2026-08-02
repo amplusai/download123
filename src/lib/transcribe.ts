@@ -3,16 +3,22 @@ import { tmpdir } from "os";
 import path from "path";
 import ffmpegPath from "ffmpeg-static";
 
-const SNIPPET_SECONDS = 8;
-const TITLE_MAX_CHARS = 15;
+const WINDOW_SECONDS = 8;
+const TITLE_MAX_CHARS = 30;
+// Scan several windows across the start of the track looking for vocals,
+// since many songs open with an instrumental intro. Fast-seek (-ss before
+// -i) keeps each probe cheap even on long files.
+const SCAN_OFFSETS_SEC = [0, 8, 16, 24, 32, 45, 60];
 
-function extractPcmSnippet(inputPath: string): Promise<Float32Array> {
+function extractPcmWindow(inputPath: string, offsetSeconds: number): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath as string, [
+      "-ss",
+      String(offsetSeconds),
       "-i",
       inputPath,
       "-t",
-      String(SNIPPET_SECONDS),
+      String(WINDOW_SECONDS),
       "-ar",
       "16000",
       "-ac",
@@ -37,22 +43,22 @@ function extractPcmSnippet(inputPath: string): Promise<Float32Array> {
   });
 }
 
-// Lazily loaded and cached across warm invocations of the same serverless instance.
-let transcriberPromise: Promise<
-  (audio: Float32Array, options?: Record<string, unknown>) => Promise<{ text: string }>
-> | null = null;
+type Transcriber = (
+  audio: Float32Array,
+  options?: Record<string, unknown>
+) => Promise<{ text: string }>;
 
-async function getTranscriber() {
+// Lazily loaded and cached across warm invocations of the same serverless instance.
+let transcriberPromise: Promise<Transcriber> | null = null;
+
+async function getTranscriber(): Promise<Transcriber> {
   if (!transcriberPromise) {
     transcriberPromise = (async () => {
       const { pipeline, env } = await import("@xenova/transformers");
       env.allowLocalModels = false;
       env.cacheDir = path.join(tmpdir(), "transformers-cache");
       const transcriber = await pipeline("automatic-speech-recognition", "Xenova/whisper-tiny");
-      return transcriber as unknown as (
-        audio: Float32Array,
-        options?: Record<string, unknown>
-      ) => Promise<{ text: string }>;
+      return transcriber as unknown as Transcriber;
     })();
   }
   return transcriberPromise;
@@ -62,8 +68,8 @@ function deriveTitleFromText(text: string): string {
   const cleaned = text
     .trim()
     // Whisper emits bracketed non-speech tags like "(upbeat music)" or
-    // "[Music]" for instrumental sections; strip those out so they don't
-    // masquerade as a real title.
+    // "[Music]" for instrumental sections; strip those out so an
+    // instrumental window can't masquerade as a real title.
     .replace(/[([][^)\]]*[)\]]/g, "")
     .trim()
     .replace(/\s+/g, " ")
@@ -73,28 +79,43 @@ function deriveTitleFromText(text: string): string {
 }
 
 /**
- * Best-effort: transcribes the first few seconds of an audio file and returns
- * a short title derived from the recognized lyrics. Returns "" on any failure
- * (missing/garbled speech, model load failure, etc.) so callers can fall back.
+ * Best-effort: scans a handful of windows across the start of the track
+ * (to skip past instrumental intros) and transcribes each with Whisper,
+ * using its own silence/no-speech detection as a cheap vocal-vs-instrument
+ * classifier — the first window that yields real recognized text wins.
+ * Returns "" if no window produced usable text, so callers can fall back
+ * to a generic name.
  */
 export async function guessTitleFromAudio(inputPath: string): Promise<string> {
+  let transcriber: Transcriber;
   try {
-    const pcm = await extractPcmSnippet(inputPath);
-    if (pcm.length === 0) return "";
-
-    const transcriber = await getTranscriber();
-    // whisper-tiny's language auto-detection frequently misfires on sung/
-    // musical audio and silently returns an empty transcript, so force
-    // English rather than auto-detect. Non-English lyrics will be
-    // transcribed poorly, but that beats always falling back to "Track N".
-    const result = await transcriber(pcm, {
-      chunk_length_s: SNIPPET_SECONDS,
-      language: "english",
-      task: "transcribe",
-    });
-    return deriveTitleFromText(result.text ?? "");
+    transcriber = await getTranscriber();
   } catch (err) {
-    console.error("guessTitleFromAudio failed:", err);
+    console.error("guessTitleFromAudio: failed to load model:", err);
     return "";
   }
+
+  for (const offset of SCAN_OFFSETS_SEC) {
+    try {
+      const pcm = await extractPcmWindow(inputPath, offset);
+      if (pcm.length === 0) break; // seeked past the end of the file
+
+      const result = await transcriber(pcm, {
+        chunk_length_s: WINDOW_SECONDS,
+        // whisper-tiny's language auto-detection frequently misfires on
+        // sung/musical audio and silently returns an empty transcript, so
+        // force English rather than auto-detect. Non-English lyrics will
+        // be transcribed poorly, but that beats no output at all.
+        language: "english",
+        task: "transcribe",
+      });
+
+      const title = deriveTitleFromText(result.text ?? "");
+      if (title) return title;
+    } catch (err) {
+      console.error(`guessTitleFromAudio: window at ${offset}s failed:`, err);
+    }
+  }
+
+  return "";
 }
