@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["yt-dlp-exec", "ffmpeg-static"],
+  serverExternalPackages: ["yt-dlp-exec", "ffmpeg-static", "@xenova/transformers", "sharp"],
 };
 
 export default nextConfig;

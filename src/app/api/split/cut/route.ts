@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { parseTimeToSeconds, runFfmpeg, sanitizeFilename } from "@/lib/audio-split";
+import { guessTitleFromAudio } from "@/lib/transcribe";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -38,9 +39,8 @@ export async function POST(request: Request) {
     }
   }
 
-  const title = sanitizeFilename(typeof titleRaw === "string" ? titleRaw : "");
+  const clientTitle = typeof titleRaw === "string" ? titleRaw.trim() : "";
   const index = typeof indexRaw === "string" && indexRaw.trim() ? indexRaw.trim() : null;
-  const outputName = index ? `${index.padStart(2, "0")}_${title}.mp3` : `${title}.mp3`;
 
   const workDir = await mkdtemp(path.join(tmpdir(), "cut-"));
   const inputPath = path.join(workDir, `input${path.extname(file.name) || ".mp3"}`);
@@ -57,6 +57,11 @@ export async function POST(request: Request) {
     args.push("-vn", "-acodec", "libmp3lame", "-q:a", "2", outputPath);
 
     await runFfmpeg(args);
+
+    const lyricsTitle = await guessTitleFromAudio(outputPath);
+    const resolvedTitle = lyricsTitle || clientTitle || `Track ${index ?? ""}`.trim();
+    const title = sanitizeFilename(resolvedTitle);
+    const outputName = index ? `${index.padStart(2, "0")}_${title}.mp3` : `${title}.mp3`;
 
     const buffer = await readFile(outputPath);
 

@@ -108,12 +108,7 @@ function ToastBanner({ toast, onClose }: { toast: Toast; onClose: () => void }) 
 
 const URL_INPUT_COUNT = 5;
 
-type SplitTrack = { start: string; title: string };
-
-const emptySplitTracks = (): SplitTrack[] => [
-  { start: "", title: "" },
-  { start: "", title: "" },
-];
+const emptySplitTracks = (): string[] => ["", ""];
 
 export default function Home() {
   const [urls, setUrls] = useState<string[]>(Array(URL_INPUT_COUNT).fill(""));
@@ -126,7 +121,7 @@ export default function Home() {
 
   const [splitFile, setSplitFile] = useState<File | null>(null);
   const [splitMode, setSplitMode] = useState<"auto" | "manual">("auto");
-  const [splitTracks, setSplitTracks] = useState<SplitTrack[]>(emptySplitTracks());
+  const [splitTracks, setSplitTracks] = useState<string[]>(emptySplitTracks());
   const [splitStatus, setSplitStatus] = useState<Status>({ state: "idle" });
   const splitFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -136,9 +131,7 @@ export default function Home() {
   const isConverting = convertStatus.state === "loading";
   const isSplitting = splitStatus.state === "loading";
   const filledUrls = urls.map((u) => u.trim()).filter(Boolean);
-  const validSplitTracks = splitTracks.filter(
-    (t) => t.start.trim() && t.title.trim()
-  );
+  const validSplitTracks = splitTracks.map((s) => s.trim()).filter(Boolean);
 
   useEffect(() => {
     if (!toast) return;
@@ -220,14 +213,12 @@ export default function Home() {
     }
   };
 
-  const setSplitTrackAt = (index: number, field: keyof SplitTrack, value: string) => {
-    setSplitTracks((prev) =>
-      prev.map((t, i) => (i === index ? { ...t, [field]: value } : t))
-    );
+  const setSplitTrackAt = (index: number, value: string) => {
+    setSplitTracks((prev) => prev.map((t, i) => (i === index ? value : t)));
   };
 
   const addSplitTrackRow = () => {
-    setSplitTracks((prev) => [...prev, { start: "", title: "" }]);
+    setSplitTracks((prev) => [...prev, ""]);
   };
 
   const removeSplitTrackRow = (index: number) => {
@@ -241,7 +232,7 @@ export default function Home() {
     setSplitStatus({ state: "loading" });
 
     try {
-      let points: { seconds: number; title: string }[];
+      let points: number[];
 
       if (splitMode === "auto") {
         const detectForm = new FormData();
@@ -257,12 +248,14 @@ export default function Home() {
           setToast({ type: "error", message });
           return;
         }
-        points = detectData.tracks;
+        points = (
+          detectData.tracks as { seconds: number }[]
+        ).map((t) => t.seconds);
       } else {
         points = validSplitTracks
-          .map((t) => ({ seconds: parseTimeToSeconds(t.start), title: t.title }))
-          .filter((t): t is { seconds: number; title: string } => t.seconds !== null)
-          .sort((a, b) => a.seconds - b.seconds);
+          .map((s) => parseTimeToSeconds(s))
+          .filter((s): s is number => s !== null)
+          .sort((a, b) => a - b);
 
         if (points.length === 0) {
           const message = "시작 시간을 올바르게 입력하세요. (예: 1:23)";
@@ -276,14 +269,13 @@ export default function Home() {
       let failCount = 0;
 
       for (let i = 0; i < points.length; i++) {
-        const { seconds, title } = points[i];
-        const nextSeconds = i + 1 < points.length ? points[i + 1].seconds : null;
+        const seconds = points[i];
+        const nextSeconds = i + 1 < points.length ? points[i + 1] : null;
 
         const cutForm = new FormData();
         cutForm.append("file", splitFile);
         cutForm.append("start", String(seconds));
         if (nextSeconds !== null) cutForm.append("end", String(nextSeconds));
-        cutForm.append("title", title);
         cutForm.append("index", String(i + 1));
 
         try {
@@ -292,7 +284,7 @@ export default function Home() {
             failCount += 1;
             continue;
           }
-          await triggerBrowserDownload(res, `${title}.mp3`);
+          await triggerBrowserDownload(res, `track-${i + 1}.mp3`);
           successCount += 1;
         } catch {
           failCount += 1;
@@ -569,33 +561,26 @@ export default function Home() {
                   직접 입력
                 </button>
               </div>
-              {splitMode === "auto" && (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  곡 사이의 무음 구간을 자동으로 찾아 나눕니다. 곡끼리 끊김 없이 이어지면 정확하지 않을 수 있어요.
-                </p>
-              )}
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {splitMode === "auto"
+                  ? "곡 사이의 무음 구간을 자동으로 찾아 나눕니다. 곡끼리 끊김 없이 이어지면 정확하지 않을 수 있어요."
+                  : "각 곡의 시작 시간만 입력하세요."}{" "}
+                파일명은 각 곡의 첫 소절을 인식해 자동으로 붙여요 (인식이 어려우면 Track 01처럼 표시될 수 있어요).
+              </p>
             </div>
 
             {splitMode === "manual" && (
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                곡 목록 (시작 시간, 제목)
+                곡 시작 시간
               </label>
-              {splitTracks.map((track, index) => (
+              {splitTracks.map((start, index) => (
                 <div key={index} className="flex items-center gap-2">
                   <input
                     type="text"
-                    value={track.start}
-                    onChange={(e) => setSplitTrackAt(index, "start", e.target.value)}
-                    placeholder="0:00"
-                    disabled={isSplitting}
-                    className={`${inputClass} w-20 shrink-0`.replace("w-full", "")}
-                  />
-                  <input
-                    type="text"
-                    value={track.title}
-                    onChange={(e) => setSplitTrackAt(index, "title", e.target.value)}
-                    placeholder={`${index + 1}번째 곡 제목`}
+                    value={start}
+                    onChange={(e) => setSplitTrackAt(index, e.target.value)}
+                    placeholder={`${index + 1}번째 곡 시작 시간 (예: 1:23)`}
                     disabled={isSplitting}
                     className={`${inputClass} min-w-0 flex-1`}
                   />
