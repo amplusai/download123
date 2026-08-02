@@ -61,8 +61,10 @@ async function triggerBrowserDownload(res: Response, fallbackName: string) {
   URL.revokeObjectURL(objectUrl);
 }
 
+const URL_INPUT_COUNT = 5;
+
 export default function Home() {
-  const [url, setUrl] = useState("");
+  const [urls, setUrls] = useState<string[]>(Array(URL_INPUT_COUNT).fill(""));
   const [audioOnly, setAudioOnly] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<Status>({ state: "idle" });
 
@@ -72,35 +74,50 @@ export default function Home() {
 
   const isDownloading = downloadStatus.state === "loading";
   const isConverting = convertStatus.state === "loading";
+  const filledUrls = urls.map((u) => u.trim()).filter(Boolean);
+
+  const setUrlAt = (index: number, value: string) => {
+    setUrls((prev) => prev.map((u, i) => (i === index ? value : u)));
+  };
 
   const handleDownloadClick = async () => {
-    const trimmedUrl = url.trim();
-    if (!trimmedUrl || isDownloading) return;
+    if (filledUrls.length === 0 || isDownloading) return;
 
     setDownloadStatus({ state: "loading" });
-    try {
-      const res = await fetch("/api/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmedUrl, audioOnly }),
-      });
+    let successCount = 0;
+    const failed: string[] = [];
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setDownloadStatus({
-          state: "error",
-          message: data?.error ?? "다운로드에 실패했습니다.",
+    for (const trimmedUrl of filledUrls) {
+      try {
+        const res = await fetch("/api/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmedUrl, audioOnly }),
         });
-        return;
-      }
 
-      await triggerBrowserDownload(res, audioOnly ? "download.mp3" : "download.mp4");
+        if (!res.ok) {
+          failed.push(trimmedUrl);
+          continue;
+        }
+
+        await triggerBrowserDownload(res, audioOnly ? "download.mp3" : "download.mp4");
+        successCount += 1;
+      } catch {
+        failed.push(trimmedUrl);
+      }
+    }
+
+    if (failed.length === 0) {
       setDownloadStatus({
         state: "success",
-        message: `${audioOnly ? "MP3" : "영상"} 다운로드가 시작되었습니다. 브라우저의 다운로드 폴더를 확인하세요.`,
+        message: `${successCount}개 ${audioOnly ? "MP3" : "영상"} 다운로드가 시작되었습니다. 브라우저의 다운로드 폴더를 확인하세요.`,
       });
-    } catch {
-      setDownloadStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
+      setUrls(Array(URL_INPUT_COUNT).fill(""));
+    } else {
+      setDownloadStatus({
+        state: "error",
+        message: `${successCount}개 성공, ${failed.length}개 실패했습니다.`,
+      });
     }
   };
 
@@ -147,7 +164,7 @@ export default function Home() {
           <SquarePlay className="h-6 w-6 text-white" strokeWidth={2} />
         </div>
         <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-          다운로더123
+          다운로드123
         </h1>
         <p className="mt-2 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
           URL을 붙여넣으면 영상이나 MP3를 브라우저로 바로 다운로드합니다.
@@ -172,24 +189,23 @@ export default function Home() {
 
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="url"
-                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
-              >
-                URL
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                URL (최대 {URL_INPUT_COUNT}개)
               </label>
-              <div className="relative">
-                <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input
-                  id="url"
-                  type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  disabled={isDownloading}
-                  className={`${inputClass} pl-9`}
-                />
-              </div>
+              {urls.map((value, index) => (
+                <div key={index} className="relative">
+                  <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                  <input
+                    id={index === 0 ? "url" : undefined}
+                    type="url"
+                    value={value}
+                    onChange={(e) => setUrlAt(index, e.target.value)}
+                    placeholder={`https://www.youtube.com/watch?v=... (${index + 1})`}
+                    disabled={isDownloading}
+                    className={`${inputClass} pl-9`}
+                  />
+                </div>
+              ))}
             </div>
 
             <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
@@ -206,7 +222,7 @@ export default function Home() {
             <button
               type="button"
               onClick={handleDownloadClick}
-              disabled={!url.trim() || isDownloading}
+              disabled={filledUrls.length === 0 || isDownloading}
               className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-red-500/25 transition-all hover:shadow-lg hover:shadow-red-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               {isDownloading ? (
@@ -217,7 +233,7 @@ export default function Home() {
               ) : (
                 <>
                   <Download className="h-4 w-4" />
-                  다운로드
+                  다운로드{filledUrls.length > 1 ? ` (${filledUrls.length}개)` : ""}
                 </>
               )}
             </button>
