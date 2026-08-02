@@ -51,10 +51,12 @@ export async function POST(request: Request) {
       noWarnings: true,
       restrictFilenames: true,
       ffmpegLocation: ffmpegPath as string,
+      extractorArgs: "youtube:player_client=android,web",
       ...(audioOnly
         ? { extractAudio: true, audioFormat: "mp3", format: "bestaudio/best" }
         : { format: "bestvideo+bestaudio/best" }),
-    });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
 
     const files = await readdir(workDir);
     if (files.length === 0) {
