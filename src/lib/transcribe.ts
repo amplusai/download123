@@ -64,18 +64,37 @@ async function getTranscriber(): Promise<Transcriber> {
   return transcriberPromise;
 }
 
-function deriveTitleFromText(text: string): string {
-  const cleaned = text
+function cleanTranscript(text: string): string {
+  return text
     .trim()
     // Whisper emits bracketed non-speech tags like "(upbeat music)" or
     // "[Music]" for instrumental sections; strip those out so an
-    // instrumental window can't masquerade as a real title.
+    // instrumental window can't masquerade as recognized vocals.
     .replace(/[([][^)\]]*[)\]]/g, "")
     .trim()
     .replace(/\s+/g, " ")
     .replace(/[\\/:*?"<>|]/g, "");
-  if (!cleaned) return "";
-  return cleaned.slice(0, TITLE_MAX_CHARS);
+}
+
+async function transcribeWindow(
+  transcriber: Transcriber,
+  inputPath: string,
+  offsetSeconds: number
+): Promise<string | null> {
+  const pcm = await extractPcmWindow(inputPath, offsetSeconds);
+  if (pcm.length === 0) return null; // seeked past the end of the file
+
+  const result = await transcriber(pcm, {
+    chunk_length_s: WINDOW_SECONDS,
+    // whisper-tiny's language auto-detection frequently misfires on
+    // sung/musical audio and silently returns an empty transcript, so
+    // force English rather than auto-detect. Non-English lyrics will
+    // be transcribed poorly, but that beats no output at all.
+    language: "english",
+    task: "transcribe",
+  });
+
+  return cleanTranscript(result.text ?? "");
 }
 
 /**
@@ -97,25 +116,43 @@ export async function guessTitleFromAudio(inputPath: string): Promise<string> {
 
   for (const offset of SCAN_OFFSETS_SEC) {
     try {
-      const pcm = await extractPcmWindow(inputPath, offset);
-      if (pcm.length === 0) break; // seeked past the end of the file
-
-      const result = await transcriber(pcm, {
-        chunk_length_s: WINDOW_SECONDS,
-        // whisper-tiny's language auto-detection frequently misfires on
-        // sung/musical audio and silently returns an empty transcript, so
-        // force English rather than auto-detect. Non-English lyrics will
-        // be transcribed poorly, but that beats no output at all.
-        language: "english",
-        task: "transcribe",
-      });
-
-      const title = deriveTitleFromText(result.text ?? "");
-      if (title) return title;
+      const text = await transcribeWindow(transcriber, inputPath, offset);
+      if (text === null) break; // seeked past the end of the file
+      if (text) return text.slice(0, TITLE_MAX_CHARS);
     } catch (err) {
       console.error(`guessTitleFromAudio: window at ${offset}s failed:`, err);
     }
   }
 
   return "";
+}
+
+/**
+ * Best-effort: scans across the track the same way guessTitleFromAudio
+ * does, but instead of stopping at the first vocal window, transcribes
+ * every window and stitches the recognized text together — for showing
+ * the full recognized vocals/lyrics rather than deriving a short filename.
+ * Returns "" if no window produced usable text.
+ */
+export async function transcribeVocalsText(inputPath: string): Promise<string> {
+  let transcriber: Transcriber;
+  try {
+    transcriber = await getTranscriber();
+  } catch (err) {
+    console.error("transcribeVocalsText: failed to load model:", err);
+    return "";
+  }
+
+  const lines: string[] = [];
+  for (const offset of SCAN_OFFSETS_SEC) {
+    try {
+      const text = await transcribeWindow(transcriber, inputPath, offset);
+      if (text === null) break; // seeked past the end of the file
+      if (text) lines.push(text);
+    } catch (err) {
+      console.error(`transcribeVocalsText: window at ${offset}s failed:`, err);
+    }
+  }
+
+  return lines.join(" ");
 }

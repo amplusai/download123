@@ -8,6 +8,7 @@ import {
   FileVideo,
   Link2,
   Loader2,
+  MicVocal,
   Music,
   Plus,
   Scissors,
@@ -125,11 +126,17 @@ export default function Home() {
   const [splitStatus, setSplitStatus] = useState<Status>({ state: "idle" });
   const splitFileInputRef = useRef<HTMLInputElement>(null);
 
+  const [transcribeFile, setTranscribeFile] = useState<File | null>(null);
+  const [transcribeResult, setTranscribeResult] = useState("");
+  const [transcribeStatus, setTranscribeStatus] = useState<Status>({ state: "idle" });
+  const transcribeFileInputRef = useRef<HTMLInputElement>(null);
+
   const [toast, setToast] = useState<Toast | null>(null);
 
   const isDownloading = downloadStatus.state === "loading";
   const isConverting = convertStatus.state === "loading";
   const isSplitting = splitStatus.state === "loading";
+  const isTranscribing = transcribeStatus.state === "loading";
   const filledUrls = urls.map((u) => u.trim()).filter(Boolean);
   const validSplitTracks = splitTracks.map((s) => s.trim()).filter(Boolean);
 
@@ -305,6 +312,34 @@ export default function Home() {
       }
     } catch {
       setSplitStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
+    }
+  };
+
+  const handleTranscribeClick = async () => {
+    if (!transcribeFile || isTranscribing) return;
+
+    setTranscribeStatus({ state: "loading" });
+    setTranscribeResult("");
+    try {
+      const formData = new FormData();
+      formData.append("file", transcribeFile);
+
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const message = data?.error ?? "텍스트 변환에 실패했습니다.";
+        setTranscribeStatus({ state: "error", message });
+        return;
+      }
+
+      setTranscribeResult(data.text ?? "");
+      setTranscribeStatus({ state: "idle" });
+    } catch {
+      setTranscribeStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
     }
   };
 
@@ -633,6 +668,86 @@ export default function Home() {
           {splitStatus.state !== "idle" && splitStatus.state !== "loading" && (
             <div className="mt-4">
               <StatusBanner status={splitStatus} />
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-zinc-200/80 bg-white/80 p-8 shadow-xl shadow-zinc-200/50 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/80 dark:shadow-none">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-cyan-600 dark:bg-cyan-950/60 dark:text-cyan-400">
+              <MicVocal className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                보컬 텍스트 변환
+              </h2>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                오디오 파일의 보컬(노래하는 목소리)을 인식해 텍스트로 보여드려요
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="transcribeFile"
+                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
+              >
+                변환할 오디오 파일
+              </label>
+              <label
+                htmlFor="transcribeFile"
+                className={`flex cursor-pointer items-center gap-2 rounded-xl border border-dashed px-3.5 py-3 text-sm transition-colors ${
+                  transcribeFile
+                    ? "border-cyan-300 bg-cyan-50/60 text-cyan-700 dark:border-cyan-700 dark:bg-cyan-950/30 dark:text-cyan-300"
+                    : "border-zinc-300 text-zinc-500 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-500"
+                } ${isTranscribing ? "pointer-events-none opacity-60" : ""}`}
+              >
+                <Music className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {transcribeFile ? transcribeFile.name : "보컬이 담긴 오디오 파일 선택"}
+                </span>
+                <input
+                  ref={transcribeFileInputRef}
+                  id="transcribeFile"
+                  type="file"
+                  accept="audio/*,.mp3"
+                  onChange={(e) => setTranscribeFile(e.target.files?.[0] ?? null)}
+                  disabled={isTranscribing}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleTranscribeClick}
+              disabled={!transcribeFile || isTranscribing}
+              className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-cyan-500/25 transition-all hover:shadow-lg hover:shadow-cyan-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            >
+              {isTranscribing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  변환 중...
+                </>
+              ) : (
+                <>
+                  <MicVocal className="h-4 w-4" />
+                  텍스트로 변환
+                </>
+              )}
+            </button>
+          </div>
+
+          {transcribeResult && (
+            <div className="mt-4 rounded-xl bg-cyan-50 px-4 py-3 text-sm text-cyan-800 ring-1 ring-cyan-100 dark:bg-cyan-950/40 dark:text-cyan-300 dark:ring-cyan-900">
+              {transcribeResult}
+            </div>
+          )}
+
+          {transcribeStatus.state === "error" && (
+            <div className="mt-4">
+              <StatusBanner status={transcribeStatus} />
             </div>
           )}
         </section>
