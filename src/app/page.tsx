@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   Loader2,
   Music,
   SquarePlay,
+  X,
 } from "lucide-react";
 
 type Status =
@@ -61,6 +62,35 @@ async function triggerBrowserDownload(res: Response, fallbackName: string) {
   URL.revokeObjectURL(objectUrl);
 }
 
+type Toast = { type: "success" | "error"; message: string };
+
+function ToastBanner({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  return (
+    <div
+      className={`pointer-events-auto flex items-start gap-2 rounded-xl px-4 py-3 text-sm shadow-2xl ring-1 ${
+        toast.type === "success"
+          ? "bg-emerald-600 text-white ring-emerald-500"
+          : "bg-red-600 text-white ring-red-500"
+      }`}
+    >
+      {toast.type === "success" ? (
+        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+      ) : (
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      )}
+      <span className="flex-1">{toast.message}</span>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="닫기"
+        className="rounded-md p-0.5 opacity-80 transition-opacity hover:opacity-100"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 const URL_INPUT_COUNT = 5;
 
 export default function Home() {
@@ -72,9 +102,17 @@ export default function Home() {
   const [convertStatus, setConvertStatus] = useState<Status>({ state: "idle" });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [toast, setToast] = useState<Toast | null>(null);
+
   const isDownloading = downloadStatus.state === "loading";
   const isConverting = convertStatus.state === "loading";
   const filledUrls = urls.map((u) => u.trim()).filter(Boolean);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const setUrlAt = (index: number, value: string) => {
     setUrls((prev) => prev.map((u, i) => (i === index ? value : u)));
@@ -108,16 +146,14 @@ export default function Home() {
     }
 
     if (failed.length === 0) {
-      setDownloadStatus({
-        state: "success",
-        message: `${successCount}개 ${audioOnly ? "MP3" : "영상"} 다운로드가 시작되었습니다. 브라우저의 다운로드 폴더를 확인하세요.`,
-      });
+      const message = `다운로드 완료! ${audioOnly ? "MP3" : "영상"} ${successCount}개를 내려받았습니다.`;
+      setDownloadStatus({ state: "success", message });
+      setToast({ type: "success", message });
       setUrls(Array(URL_INPUT_COUNT).fill(""));
     } else {
-      setDownloadStatus({
-        state: "error",
-        message: `${successCount}개 성공, ${failed.length}개 실패했습니다.`,
-      });
+      const message = `${successCount}개 성공, ${failed.length}개 실패했습니다.`;
+      setDownloadStatus({ state: "error", message });
+      setToast({ type: "error", message });
     }
   };
 
@@ -154,6 +190,14 @@ export default function Home() {
 
   return (
     <div className="relative flex flex-1 flex-col items-center overflow-hidden bg-zinc-50 px-4 py-16 font-sans dark:bg-zinc-950">
+      <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
+        {toast && (
+          <div className="w-full max-w-sm">
+            <ToastBanner toast={toast} onClose={() => setToast(null)} />
+          </div>
+        )}
+      </div>
+
       <div
         aria-hidden
         className="pointer-events-none absolute -top-32 left-1/2 h-96 w-[42rem] -translate-x-1/2 rounded-full bg-gradient-to-r from-red-300/30 via-fuchsia-300/20 to-violet-300/30 blur-3xl dark:from-red-900/20 dark:via-fuchsia-900/10 dark:to-violet-900/20"
