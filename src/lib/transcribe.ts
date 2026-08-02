@@ -9,6 +9,31 @@ const TITLE_MAX_CHARS = 30;
 // since many songs open with an instrumental intro. Fast-seek (-ss before
 // -i) keeps each probe cheap even on long files.
 const SCAN_OFFSETS_SEC = [0, 8, 16, 24, 32, 45, 60];
+// Cap full-lyrics scanning to a reasonable ceiling (a typical song length)
+// so a multi-hour file can't turn into an unbounded number of windows.
+const MAX_FULL_SCAN_SECONDS = 8 * 60;
+
+function getAudioDuration(inputPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    // `ffmpeg -i <file>` with no output prints the input's Duration to
+    // stderr and exits non-zero (no output specified) — that's fine, we
+    // only want the header info, not to decode anything.
+    const proc = spawn(ffmpegPath as string, ["-i", inputPath]);
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", () => resolve(0));
+    proc.on("close", () => {
+      const match = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+      if (!match) {
+        resolve(0);
+        return;
+      }
+      resolve(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]));
+    });
+  });
+}
 
 function extractPcmWindow(inputPath: string, offsetSeconds: number): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
@@ -128,11 +153,11 @@ export async function guessTitleFromAudio(inputPath: string): Promise<string> {
 }
 
 /**
- * Best-effort: scans across the track the same way guessTitleFromAudio
- * does, but instead of stopping at the first vocal window, transcribes
- * every window and stitches the recognized text together — for showing
- * the full recognized vocals/lyrics rather than deriving a short filename.
- * Returns "" if no window produced usable text.
+ * Best-effort: transcribes the whole track (capped at MAX_FULL_SCAN_SECONDS)
+ * in consecutive windows and stitches the recognized text together, so the
+ * full lyrics come back instead of just whatever the first vocal window
+ * caught. Instrumental-only windows are skipped. Returns "" if no window
+ * produced usable text.
  */
 export async function transcribeVocalsText(inputPath: string): Promise<string> {
   let transcriber: Transcriber;
@@ -143,8 +168,11 @@ export async function transcribeVocalsText(inputPath: string): Promise<string> {
     return "";
   }
 
+  const duration = await getAudioDuration(inputPath);
+  const scanLimit = duration > 0 ? Math.min(duration, MAX_FULL_SCAN_SECONDS) : MAX_FULL_SCAN_SECONDS;
+
   const lines: string[] = [];
-  for (const offset of SCAN_OFFSETS_SEC) {
+  for (let offset = 0; offset < scanLimit; offset += WINDOW_SECONDS) {
     try {
       const text = await transcribeWindow(transcriber, inputPath, offset);
       if (text === null) break; // seeked past the end of the file
