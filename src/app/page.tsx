@@ -45,6 +45,18 @@ function StatusBanner({ status }: { status: Status }) {
   return null;
 }
 
+function parseTimeToSeconds(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(":").map((p) => p.trim());
+  if (parts.some((p) => p === "" || Number.isNaN(Number(p)))) return null;
+  const nums = parts.map(Number);
+  if (nums.length === 1) return nums[0];
+  if (nums.length === 2) return nums[0] * 60 + nums[1];
+  if (nums.length === 3) return nums[0] * 3600 + nums[1] * 60 + nums[2];
+  return null;
+}
+
 function filenameFromContentDisposition(header: string | null): string | null {
   if (!header) return null;
   const match = /filename="?([^";]+)"?/i.exec(header);
@@ -227,35 +239,78 @@ export default function Home() {
     if (splitMode === "manual" && validSplitTracks.length === 0) return;
 
     setSplitStatus({ state: "loading" });
+
     try {
-      const formData = new FormData();
-      formData.append("file", splitFile);
-      formData.append("mode", splitMode);
-      if (splitMode === "manual") {
-        formData.append("tracks", JSON.stringify(validSplitTracks));
+      let points: { seconds: number; title: string }[];
+
+      if (splitMode === "auto") {
+        const detectForm = new FormData();
+        detectForm.append("file", splitFile);
+        const detectRes = await fetch("/api/split/detect", {
+          method: "POST",
+          body: detectForm,
+        });
+        const detectData = await detectRes.json().catch(() => null);
+        if (!detectRes.ok) {
+          const message = detectData?.error ?? "무음 구간 분석에 실패했습니다.";
+          setSplitStatus({ state: "error", message });
+          setToast({ type: "error", message });
+          return;
+        }
+        points = detectData.tracks;
+      } else {
+        points = validSplitTracks
+          .map((t) => ({ seconds: parseTimeToSeconds(t.start), title: t.title }))
+          .filter((t): t is { seconds: number; title: string } => t.seconds !== null)
+          .sort((a, b) => a.seconds - b.seconds);
+
+        if (points.length === 0) {
+          const message = "시작 시간을 올바르게 입력하세요. (예: 1:23)";
+          setSplitStatus({ state: "error", message });
+          setToast({ type: "error", message });
+          return;
+        }
       }
 
-      const res = await fetch("/api/split", {
-        method: "POST",
-        body: formData,
-      });
+      let successCount = 0;
+      let failCount = 0;
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        const message = data?.error ?? "분할에 실패했습니다.";
+      for (let i = 0; i < points.length; i++) {
+        const { seconds, title } = points[i];
+        const nextSeconds = i + 1 < points.length ? points[i + 1].seconds : null;
+
+        const cutForm = new FormData();
+        cutForm.append("file", splitFile);
+        cutForm.append("start", String(seconds));
+        if (nextSeconds !== null) cutForm.append("end", String(nextSeconds));
+        cutForm.append("title", title);
+        cutForm.append("index", String(i + 1));
+
+        try {
+          const res = await fetch("/api/split/cut", { method: "POST", body: cutForm });
+          if (!res.ok) {
+            failCount += 1;
+            continue;
+          }
+          await triggerBrowserDownload(res, `${title}.mp3`);
+          successCount += 1;
+        } catch {
+          failCount += 1;
+        }
+      }
+
+      if (failCount === 0) {
+        const message = `분할 완료! ${successCount}개 파일을 다운로드 폴더에 저장했습니다.`;
+        setSplitStatus({ state: "success", message });
+        setToast({ type: "success", message });
+        setSplitFile(null);
+        setSplitTracks(emptySplitTracks());
+        if (splitFileInputRef.current) splitFileInputRef.current.value = "";
+      } else {
+        const message = `${successCount}개 성공, ${failCount}개 실패했습니다.`;
         setSplitStatus({ state: "error", message });
         setToast({ type: "error", message });
-        return;
       }
-
-      await triggerBrowserDownload(res, "tracks.zip");
-      const trackCount = res.headers.get("X-Track-Count") ?? String(validSplitTracks.length);
-      const message = `분할 완료! ${trackCount}개 파일로 나눠 zip으로 내려받았습니다.`;
-      setSplitStatus({ state: "success", message });
-      setToast({ type: "success", message });
-      setSplitFile(null);
-      setSplitTracks(emptySplitTracks());
-      if (splitFileInputRef.current) splitFileInputRef.current.value = "";
     } catch {
       setSplitStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
     }
@@ -447,7 +502,7 @@ export default function Home() {
                 MP3 노래별 분할
               </h2>
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                여러 곡이 이어진 MP3를 시작 시간 기준으로 나눠 zip으로 받으세요
+                여러 곡이 이어진 MP3를 곡별로 나눠 개별 파일로 다운로드하세요
               </p>
             </div>
           </div>
