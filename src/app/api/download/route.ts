@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       noWarnings: true,
       restrictFilenames: true,
       ffmpegLocation: ffmpegPath as string,
-      extractorArgs: "youtube:player_client=android,web",
+      extractorArgs: "youtube:player_client=android",
       ...(audioOnly
         ? { extractAudio: true, audioFormat: "mp3", format: "bestaudio/best" }
         : { format: "bestvideo+bestaudio/best" }),
