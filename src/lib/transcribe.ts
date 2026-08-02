@@ -80,7 +80,8 @@ export async function guessTitleFromAudio(inputPath: string): Promise<string> {
     const transcriber = await getTranscriber();
     const result = await transcriber(pcm, { chunk_length_s: SNIPPET_SECONDS });
     return deriveTitleFromText(result.text ?? "");
-  } catch {
+  } catch (err) {
+    console.error("guessTitleFromAudio failed:", err);
     return "";
   }
 }
