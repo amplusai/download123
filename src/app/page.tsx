@@ -113,6 +113,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [splitFile, setSplitFile] = useState<File | null>(null);
+  const [splitMode, setSplitMode] = useState<"auto" | "manual">("auto");
   const [splitTracks, setSplitTracks] = useState<SplitTrack[]>(emptySplitTracks());
   const [splitStatus, setSplitStatus] = useState<Status>({ state: "idle" });
   const splitFileInputRef = useRef<HTMLInputElement>(null);
@@ -222,13 +223,17 @@ export default function Home() {
   };
 
   const handleSplitClick = async () => {
-    if (!splitFile || validSplitTracks.length === 0 || isSplitting) return;
+    if (!splitFile || isSplitting) return;
+    if (splitMode === "manual" && validSplitTracks.length === 0) return;
 
     setSplitStatus({ state: "loading" });
     try {
       const formData = new FormData();
       formData.append("file", splitFile);
-      formData.append("tracks", JSON.stringify(validSplitTracks));
+      formData.append("mode", splitMode);
+      if (splitMode === "manual") {
+        formData.append("tracks", JSON.stringify(validSplitTracks));
+      }
 
       const res = await fetch("/api/split", {
         method: "POST",
@@ -244,7 +249,8 @@ export default function Home() {
       }
 
       await triggerBrowserDownload(res, "tracks.zip");
-      const message = `분할 완료! ${validSplitTracks.length}개 파일로 나눠 zip으로 내려받았습니다.`;
+      const trackCount = res.headers.get("X-Track-Count") ?? String(validSplitTracks.length);
+      const message = `분할 완료! ${trackCount}개 파일로 나눠 zip으로 내려받았습니다.`;
       setSplitStatus({ state: "success", message });
       setToast({ type: "success", message });
       setSplitFile(null);
@@ -480,6 +486,44 @@ export default function Home() {
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                분할 방식
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSplitMode("auto")}
+                  disabled={isSplitting}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    splitMode === "auto"
+                      ? "border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/50 dark:text-amber-300"
+                      : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
+                  }`}
+                >
+                  자동 (무음 감지)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSplitMode("manual")}
+                  disabled={isSplitting}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    splitMode === "manual"
+                      ? "border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/50 dark:text-amber-300"
+                      : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"
+                  }`}
+                >
+                  직접 입력
+                </button>
+              </div>
+              {splitMode === "auto" && (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  곡 사이의 무음 구간을 자동으로 찾아 나눕니다. 곡끼리 끊김 없이 이어지면 정확하지 않을 수 있어요.
+                </p>
+              )}
+            </div>
+
+            {splitMode === "manual" && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
                 곡 목록 (시작 시간, 제목)
               </label>
               {splitTracks.map((track, index) => (
@@ -520,11 +564,16 @@ export default function Home() {
                 <Plus className="h-4 w-4" />곡 추가
               </button>
             </div>
+            )}
 
             <button
               type="button"
               onClick={handleSplitClick}
-              disabled={!splitFile || validSplitTracks.length === 0 || isSplitting}
+              disabled={
+                !splitFile ||
+                isSplitting ||
+                (splitMode === "manual" && validSplitTracks.length === 0)
+              }
               className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-amber-500/25 transition-all hover:shadow-lg hover:shadow-amber-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               {isSplitting ? (
