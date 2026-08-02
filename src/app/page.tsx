@@ -9,7 +9,10 @@ import {
   Link2,
   Loader2,
   Music,
+  Plus,
+  Scissors,
   SquarePlay,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -93,6 +96,13 @@ function ToastBanner({ toast, onClose }: { toast: Toast; onClose: () => void }) 
 
 const URL_INPUT_COUNT = 5;
 
+type SplitTrack = { start: string; title: string };
+
+const emptySplitTracks = (): SplitTrack[] => [
+  { start: "", title: "" },
+  { start: "", title: "" },
+];
+
 export default function Home() {
   const [urls, setUrls] = useState<string[]>(Array(URL_INPUT_COUNT).fill(""));
   const [audioOnly, setAudioOnly] = useState(false);
@@ -102,11 +112,20 @@ export default function Home() {
   const [convertStatus, setConvertStatus] = useState<Status>({ state: "idle" });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [splitFile, setSplitFile] = useState<File | null>(null);
+  const [splitTracks, setSplitTracks] = useState<SplitTrack[]>(emptySplitTracks());
+  const [splitStatus, setSplitStatus] = useState<Status>({ state: "idle" });
+  const splitFileInputRef = useRef<HTMLInputElement>(null);
+
   const [toast, setToast] = useState<Toast | null>(null);
 
   const isDownloading = downloadStatus.state === "loading";
   const isConverting = convertStatus.state === "loading";
+  const isSplitting = splitStatus.state === "loading";
   const filledUrls = urls.map((u) => u.trim()).filter(Boolean);
+  const validSplitTracks = splitTracks.filter(
+    (t) => t.start.trim() && t.title.trim()
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -185,6 +204,54 @@ export default function Home() {
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch {
       setConvertStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
+    }
+  };
+
+  const setSplitTrackAt = (index: number, field: keyof SplitTrack, value: string) => {
+    setSplitTracks((prev) =>
+      prev.map((t, i) => (i === index ? { ...t, [field]: value } : t))
+    );
+  };
+
+  const addSplitTrackRow = () => {
+    setSplitTracks((prev) => [...prev, { start: "", title: "" }]);
+  };
+
+  const removeSplitTrackRow = (index: number) => {
+    setSplitTracks((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
+  };
+
+  const handleSplitClick = async () => {
+    if (!splitFile || validSplitTracks.length === 0 || isSplitting) return;
+
+    setSplitStatus({ state: "loading" });
+    try {
+      const formData = new FormData();
+      formData.append("file", splitFile);
+      formData.append("tracks", JSON.stringify(validSplitTracks));
+
+      const res = await fetch("/api/split", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        const message = data?.error ?? "분할에 실패했습니다.";
+        setSplitStatus({ state: "error", message });
+        setToast({ type: "error", message });
+        return;
+      }
+
+      await triggerBrowserDownload(res, "tracks.zip");
+      const message = `분할 완료! ${validSplitTracks.length}개 파일로 나눠 zip으로 내려받았습니다.`;
+      setSplitStatus({ state: "success", message });
+      setToast({ type: "success", message });
+      setSplitFile(null);
+      setSplitTracks(emptySplitTracks());
+      if (splitFileInputRef.current) splitFileInputRef.current.value = "";
+    } catch {
+      setSplitStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
     }
   };
 
@@ -360,6 +427,123 @@ export default function Home() {
           {convertStatus.state !== "idle" && convertStatus.state !== "loading" && (
             <div className="mt-4">
               <StatusBanner status={convertStatus} />
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-zinc-200/80 bg-white/80 p-8 shadow-xl shadow-zinc-200/50 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/80 dark:shadow-none">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400">
+              <Scissors className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                MP3 노래별 분할
+              </h2>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                여러 곡이 이어진 MP3를 시작 시간 기준으로 나눠 zip으로 받으세요
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="splitFile"
+                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
+              >
+                분할할 MP3 파일
+              </label>
+              <label
+                htmlFor="splitFile"
+                className={`flex cursor-pointer items-center gap-2 rounded-xl border border-dashed px-3.5 py-3 text-sm transition-colors ${
+                  splitFile
+                    ? "border-amber-300 bg-amber-50/60 text-amber-700 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
+                    : "border-zinc-300 text-zinc-500 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-500"
+                } ${isSplitting ? "pointer-events-none opacity-60" : ""}`}
+              >
+                <Music className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {splitFile ? splitFile.name : "여러 곡이 담긴 mp3 파일 선택"}
+                </span>
+                <input
+                  ref={splitFileInputRef}
+                  id="splitFile"
+                  type="file"
+                  accept="audio/*,.mp3"
+                  onChange={(e) => setSplitFile(e.target.files?.[0] ?? null)}
+                  disabled={isSplitting}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                곡 목록 (시작 시간, 제목)
+              </label>
+              {splitTracks.map((track, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={track.start}
+                    onChange={(e) => setSplitTrackAt(index, "start", e.target.value)}
+                    placeholder="0:00"
+                    disabled={isSplitting}
+                    className={`${inputClass} w-20 shrink-0`.replace("w-full", "")}
+                  />
+                  <input
+                    type="text"
+                    value={track.title}
+                    onChange={(e) => setSplitTrackAt(index, "title", e.target.value)}
+                    placeholder={`${index + 1}번째 곡 제목`}
+                    disabled={isSplitting}
+                    className={`${inputClass} min-w-0 flex-1`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeSplitTrackRow(index)}
+                    disabled={isSplitting || splitTracks.length <= 1}
+                    aria-label="곡 삭제"
+                    className="shrink-0 rounded-lg p-2 text-zinc-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-red-950/40"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addSplitTrackRow}
+                disabled={isSplitting}
+                className="flex w-fit items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-amber-600 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-amber-400 dark:hover:bg-amber-950/40"
+              >
+                <Plus className="h-4 w-4" />곡 추가
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSplitClick}
+              disabled={!splitFile || validSplitTracks.length === 0 || isSplitting}
+              className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-amber-500/25 transition-all hover:shadow-lg hover:shadow-amber-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            >
+              {isSplitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  분할 중...
+                </>
+              ) : (
+                <>
+                  <Scissors className="h-4 w-4" />
+                  곡별로 분할
+                </>
+              )}
+            </button>
+          </div>
+
+          {splitStatus.state !== "idle" && splitStatus.state !== "loading" && (
+            <div className="mt-4">
+              <StatusBanner status={splitStatus} />
             </div>
           )}
         </section>
