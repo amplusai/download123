@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
   Download,
-  FolderInput,
+  FileVideo,
   Link2,
   Loader2,
   Music,
@@ -41,40 +41,63 @@ function StatusBanner({ status }: { status: Status }) {
   return null;
 }
 
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename="?([^";]+)"?/i.exec(header);
+  return match ? match[1] : null;
+}
+
+async function triggerBrowserDownload(res: Response, fallbackName: string) {
+  const blob = await res.blob();
+  const filename =
+    filenameFromContentDisposition(res.headers.get("Content-Disposition")) ?? fallbackName;
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
-  const [directory, setDirectory] = useState("");
   const [audioOnly, setAudioOnly] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<Status>({ state: "idle" });
 
-  const [filePath, setFilePath] = useState("");
-  const [outputDirectory, setOutputDirectory] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [convertStatus, setConvertStatus] = useState<Status>({ state: "idle" });
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isDownloading = downloadStatus.state === "loading";
   const isConverting = convertStatus.state === "loading";
 
   const handleDownloadClick = async () => {
     const trimmedUrl = url.trim();
-    const trimmedDirectory = directory.trim();
-    if (!trimmedUrl || !trimmedDirectory || isDownloading) return;
+    if (!trimmedUrl || isDownloading) return;
 
     setDownloadStatus({ state: "loading" });
     try {
       const res = await fetch("/api/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmedUrl, directory: trimmedDirectory, audioOnly }),
+        body: JSON.stringify({ url: trimmedUrl, audioOnly }),
       });
-      const data = await res.json();
 
       if (!res.ok) {
-        setDownloadStatus({ state: "error", message: data.error ?? "다운로드에 실패했습니다." });
+        const data = await res.json().catch(() => null);
+        setDownloadStatus({
+          state: "error",
+          message: data?.error ?? "다운로드에 실패했습니다.",
+        });
         return;
       }
+
+      await triggerBrowserDownload(res, audioOnly ? "download.mp3" : "download.mp4");
       setDownloadStatus({
         state: "success",
-        message: `${audioOnly ? "MP3" : "영상"} 다운로드가 완료되었습니다. (저장 위치: ${trimmedDirectory})`,
+        message: `${audioOnly ? "MP3" : "영상"} 다운로드가 시작되었습니다. 브라우저의 다운로드 폴더를 확인하세요.`,
       });
     } catch {
       setDownloadStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
@@ -82,30 +105,31 @@ export default function Home() {
   };
 
   const handleConvertClick = async () => {
-    const trimmedFilePath = filePath.trim();
-    const trimmedOutputDirectory = outputDirectory.trim();
-    if (!trimmedFilePath || isConverting) return;
+    if (!file || isConverting) return;
 
     setConvertStatus({ state: "loading" });
     try {
+      const formData = new FormData();
+      formData.append("file", file);
+
       const res = await fetch("/api/convert", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filePath: trimmedFilePath,
-          outputDirectory: trimmedOutputDirectory || undefined,
-        }),
+        body: formData,
       });
-      const data = await res.json();
 
       if (!res.ok) {
-        setConvertStatus({ state: "error", message: data.error ?? "변환에 실패했습니다." });
+        const data = await res.json().catch(() => null);
+        setConvertStatus({ state: "error", message: data?.error ?? "변환에 실패했습니다." });
         return;
       }
+
+      await triggerBrowserDownload(res, "converted.mp3");
       setConvertStatus({
         state: "success",
-        message: `MP3 변환이 완료되었습니다. (저장 위치: ${data.outputPath})`,
+        message: "MP3 변환이 완료되어 다운로드가 시작되었습니다.",
       });
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     } catch {
       setConvertStatus({ state: "error", message: "서버와 통신할 수 없습니다." });
     }
@@ -126,7 +150,7 @@ export default function Home() {
           다운로더123
         </h1>
         <p className="mt-2 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-          URL을 붙여넣고 원하는 위치에 영상이나 MP3로 저장하세요.
+          URL을 붙여넣으면 영상이나 MP3를 브라우저로 바로 다운로드합니다.
         </p>
       </header>
 
@@ -141,7 +165,7 @@ export default function Home() {
                 영상 다운로드
               </h2>
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                URL과 저장 디렉토리를 입력하세요
+                URL을 입력하면 브라우저로 다운로드됩니다
               </p>
             </div>
           </div>
@@ -168,27 +192,6 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="directory"
-                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
-              >
-                다운로드 디렉토리
-              </label>
-              <div className="relative">
-                <FolderInput className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input
-                  id="directory"
-                  type="text"
-                  value={directory}
-                  onChange={(e) => setDirectory(e.target.value)}
-                  placeholder="예: C:\Users\me\Downloads"
-                  disabled={isDownloading}
-                  className={`${inputClass} pl-9`}
-                />
-              </div>
-            </div>
-
             <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
               <input
                 type="checkbox"
@@ -203,7 +206,7 @@ export default function Home() {
             <button
               type="button"
               onClick={handleDownloadClick}
-              disabled={!url.trim() || !directory.trim() || isDownloading}
+              disabled={!url.trim() || isDownloading}
               className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-red-500/25 transition-all hover:shadow-lg hover:shadow-red-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               {isDownloading ? (
@@ -245,44 +248,39 @@ export default function Home() {
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <label
-                htmlFor="filePath"
+                htmlFor="file"
                 className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
               >
-                변환할 파일 경로
+                변환할 파일
               </label>
-              <input
-                id="filePath"
-                type="text"
-                value={filePath}
-                onChange={(e) => setFilePath(e.target.value)}
-                placeholder="예: C:\Users\me\Downloads\video.webm"
-                disabled={isConverting}
-                className={inputClass}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
               <label
-                htmlFor="outputDirectory"
-                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
+                htmlFor="file"
+                className={`flex cursor-pointer items-center gap-2 rounded-xl border border-dashed px-3.5 py-3 text-sm transition-colors ${
+                  file
+                    ? "border-violet-300 bg-violet-50/60 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
+                    : "border-zinc-300 text-zinc-500 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-500"
+                } ${isConverting ? "pointer-events-none opacity-60" : ""}`}
               >
-                저장 디렉토리 (선택, 비워두면 원본과 같은 위치)
+                <FileVideo className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {file ? file.name : "webm, mp4 등 동영상 파일 선택"}
+                </span>
+                <input
+                  ref={fileInputRef}
+                  id="file"
+                  type="file"
+                  accept="video/*,.webm,.mp4,.mkv,.mov,.avi"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  disabled={isConverting}
+                  className="sr-only"
+                />
               </label>
-              <input
-                id="outputDirectory"
-                type="text"
-                value={outputDirectory}
-                onChange={(e) => setOutputDirectory(e.target.value)}
-                placeholder="예: C:\Users\me\Music"
-                disabled={isConverting}
-                className={inputClass}
-              />
             </div>
 
             <button
               type="button"
               onClick={handleConvertClick}
-              disabled={!filePath.trim() || isConverting}
+              disabled={!file || isConverting}
               className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-violet-500/25 transition-all hover:shadow-lg hover:shadow-violet-500/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               {isConverting ? (
@@ -308,7 +306,7 @@ export default function Home() {
       </div>
 
       <footer className="relative z-10 mt-10 text-xs text-zinc-400 dark:text-zinc-600">
-        yt-dlp · ffmpeg 기반 · 로컬에서만 동작합니다
+        yt-dlp · ffmpeg 기반
       </footer>
     </div>
   );

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { access, mkdir } from "fs/promises";
-import { spawn } from "child_process";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
 import path from "path";
+import { spawn } from "child_process";
 import ffmpegPath from "ffmpeg-static";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 function runFfmpeg(args: string[]) {
   return new Promise<void>((resolve, reject) => {
@@ -24,51 +26,27 @@ function runFfmpeg(args: string[]) {
 }
 
 export async function POST(request: Request) {
-  let body: { filePath?: string; outputDirectory?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
+  const formData = await request.formData();
+  const file = formData.get("file");
+
+  if (!(file instanceof File)) {
+    return NextResponse.json({ error: "변환할 파일을 선택하세요." }, { status: 400 });
   }
 
-  const filePath = body.filePath?.trim();
-  const outputDirectory = body.outputDirectory?.trim();
-
-  if (!filePath) {
-    return NextResponse.json(
-      { error: "변환할 파일 경로를 입력하세요." },
-      { status: 400 }
-    );
-  }
+  const workDir = await mkdtemp(path.join(tmpdir(), "convert-"));
+  const originalName = file.name || "input";
+  const baseName = path.basename(originalName, path.extname(originalName)) || "output";
+  const inputPath = path.join(workDir, `input${path.extname(originalName)}`);
+  const outputPath = path.join(workDir, "output.mp3");
 
   try {
-    await access(filePath);
-  } catch {
-    return NextResponse.json(
-      { error: `파일을 찾을 수 없습니다: ${filePath}` },
-      { status: 400 }
-    );
-  }
+    const arrayBuffer = await file.arrayBuffer();
+    await writeFile(inputPath, Buffer.from(arrayBuffer));
 
-  const targetDirectory = outputDirectory || path.dirname(filePath);
-
-  try {
-    await mkdir(targetDirectory, { recursive: true });
-  } catch {
-    return NextResponse.json(
-      { error: `디렉토리를 생성할 수 없습니다: ${targetDirectory}` },
-      { status: 400 }
-    );
-  }
-
-  const baseName = path.basename(filePath, path.extname(filePath));
-  const outputPath = path.join(targetDirectory, `${baseName}.mp3`);
-
-  try {
     await runFfmpeg([
       "-y",
       "-i",
-      filePath,
+      inputPath,
       "-vn",
       "-acodec",
       "libmp3lame",
@@ -76,10 +54,22 @@ export async function POST(request: Request) {
       "2",
       outputPath,
     ]);
-    return NextResponse.json({ ok: true, outputPath });
+
+    const outBuffer = await readFile(outputPath);
+    const downloadName = `${baseName}.mp3`.replace(/[\\/:*?"<>|]/g, "_");
+
+    return new NextResponse(outBuffer, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Disposition": `attachment; filename="${downloadName}"`,
+        "Content-Length": String(outBuffer.length),
+      },
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "변환 중 오류가 발생했습니다.";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
   }
 }
